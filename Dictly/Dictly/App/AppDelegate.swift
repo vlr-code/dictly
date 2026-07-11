@@ -34,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let menuBar = MenuBarController(coordinator: coordinator)
         menuBar.onShowSettings = { [weak self] in self?.showSettings() }
         menuBar.onShowOnboarding = { [weak self] in self?.showOnboarding() }
+        menuBar.onShowAbout = { [weak self] in self?.showAbout() }
         menuBar.onQuit = { NSApp.terminate(nil) }
         menuBar.install()
         self.menuBarController = menuBar
@@ -53,6 +54,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    // MARK: - Dock icon lifecycle
+
+    // Dictly is a menu-bar (LSUIElement) app, but showing Settings, About or
+    // Onboarding switches the activation policy to .regular so the window gets
+    // a Dock icon and normal focus. Switch back once the last real window is
+    // gone — otherwise the Dock icon lingers forever (the onboarding "Done"
+    // path used to be the only one that cleaned up after itself).
+    //
+    // A watchdog timer, not NSWindow.willCloseNotification: the standard About
+    // panel disappears without ever posting willClose, so a notification-based
+    // revert misses it. The timer only runs while the Dock icon is showing.
+    private var dockIconWatchdog: Timer?
+
+    private func showDockIcon() {
+        NSApp.setActivationPolicy(.regular)
+        guard dockIconWatchdog == nil else { return }
+        dockIconWatchdog = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] timer in
+            guard let self else { timer.invalidate(); return }
+            if NSApp.activationPolicy() == .regular {
+                // The HUD doesn't keep the icon alive: it's a panel that can't
+                // become key. Neither do closed-but-retained controller windows —
+                // they are no longer visible. A minimized window counts as open:
+                // it reports isVisible == false, but its Dock tile is the user's
+                // only way back to it, so the icon must survive minimize.
+                let anyRealWindowVisible = NSApp.windows.contains {
+                    $0.isMiniaturized || ($0.isVisible && $0.canBecomeKey)
+                }
+                guard !anyRealWindowVisible else { return }
+                NSApp.setActivationPolicy(.accessory)
+            }
+            self.dockIconWatchdog?.invalidate()
+            self.dockIconWatchdog = nil
+        }
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false
     }
@@ -68,7 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if settingsWindowController == nil {
             settingsWindowController = SettingsWindowController(coordinator: dictationCoordinator!)
         }
-        NSApp.setActivationPolicy(.regular)
+        showDockIcon()
         guard let win = settingsWindowController?.window else { return }
         Self.centerOnActiveScreen(win)
         win.makeKeyAndOrderFront(nil)
@@ -82,15 +118,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Settings.shared.didCompleteOnboarding = true
                 self?.onboardingWindowController?.close()
                 self?.onboardingWindowController = nil
-                NSApp.setActivationPolicy(.accessory)
+                // No explicit switch back to .accessory here: the dock-icon
+                // watchdog reverts once the last real window is gone. Forcing it
+                // here would strip the Dock icon while e.g. Settings is still open.
                 self?.dictationCoordinator?.start()
             }
         }
-        NSApp.setActivationPolicy(.regular)
+        showDockIcon()
         guard let win = onboardingWindowController?.window else { return }
         Self.centerOnActiveScreen(win)
         win.makeKeyAndOrderFront(nil)
         win.orderFrontRegardless()
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func showAbout() {
+        showDockIcon()
+        NSApp.orderFrontStandardAboutPanel(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 

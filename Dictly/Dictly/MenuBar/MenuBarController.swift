@@ -19,6 +19,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
 
     var onShowSettings: (() -> Void)?
     var onShowOnboarding: (() -> Void)?
+    var onShowAbout: (() -> Void)?
     var onQuit: (() -> Void)?
 
     /// Frame of the status-item button in screen coordinates. Used by the HUD to
@@ -200,11 +201,7 @@ final class MenuBarController: NSObject, NSMenuDelegate {
     @objc private func showSettings(_ sender: Any?) { onShowSettings?() }
     @objc private func showOnboarding(_ sender: Any?) { onShowOnboarding?() }
     @objc private func quit(_ sender: Any?) { onQuit?() }
-    @objc private func about(_ sender: Any?) {
-        NSApp.setActivationPolicy(.regular)
-        NSApp.orderFrontStandardAboutPanel(nil)
-        NSApp.activate(ignoringOtherApps: true)
-    }
+    @objc private func about(_ sender: Any?) { onShowAbout?() }
 }
 
 private extension NSMenuItem {

@@ -382,8 +382,15 @@ final class DictationCoordinator {
             let words = processed.split { $0.isWhitespace }.count
             let frontApp = NSWorkspace.shared.frontmostApplication?.localizedName
 
+            // Opt-in trailing space so push-to-talk phrases chain without typing
+            // the separator by hand. Appended after post-processing (the post
+            // processor trims edges) and only to non-empty text — an empty
+            // transcript must never insert a lone space.
+            let toInsert = Settings.shared.appendTrailingSpace && !processed.isEmpty
+                ? processed + " " : processed
+
             let insertStart = CFAbsoluteTimeGetCurrent()
-            let outcome = inserter.insert(processed)
+            let outcome = inserter.insert(toInsert)
             let insertSec = CFAbsoluteTimeGetCurrent() - insertStart
 
             let totalSec = CFAbsoluteTimeGetCurrent() - pipelineStart

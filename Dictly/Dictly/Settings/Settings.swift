@@ -20,6 +20,7 @@ final class Settings {
         static let modelID = "transcription.modelID"
         static let keepMicWarm = "audio.keepMicWarm"
         static let autoInsert = "behavior.autoInsert"
+        static let appendTrailingSpace = "behavior.appendTrailingSpace"
         static let restoreClipboard = "behavior.restoreClipboard"
         static let showHUD = "behavior.showHUD"
         static let hudPosition = "behavior.hudPosition"
@@ -203,6 +204,14 @@ final class Settings {
     var autoInsert: Bool {
         get { (defaults.object(forKey: Keys.autoInsert) as? Bool) ?? true }
         set { defaults.set(newValue, forKey: Keys.autoInsert); didChange.send() }
+    }
+
+    /// Append a single space after each inserted phrase, so push-to-talk users
+    /// can chain phrases without typing the separator themselves. Off by
+    /// default: existing users keep the exact text they dictated.
+    var appendTrailingSpace: Bool {
+        get { defaults.bool(forKey: Keys.appendTrailingSpace) }
+        set { defaults.set(newValue, forKey: Keys.appendTrailingSpace); didChange.send() }
     }
 
     var restoreClipboard: Bool {

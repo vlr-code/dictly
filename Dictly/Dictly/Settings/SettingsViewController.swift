@@ -34,12 +34,17 @@ final class SettingsViewController: NSViewController {
                                             target: nil, action: nil)
     private let autoInsertCheck = NSButton(checkboxWithTitle: "Auto-paste into the focused app",
                                             target: nil, action: nil)
+    private let appendSpaceCheck = NSButton(checkboxWithTitle: "Append a space after inserted text",
+                                             target: nil, action: nil)
     private let restoreClipboardCheck = NSButton(checkboxWithTitle: "Restore clipboard after paste",
                                                   target: nil, action: nil)
     private let showHUDCheck = NSButton(checkboxWithTitle: "Show floating HUD while dictating",
                                          target: nil, action: nil)
     private let hudPositionButton = NSPopUpButton()
 
+    private let microphoneStatus = NSTextField(labelWithString: "")
+    private let microphoneButton = BrandButton(title: "Open Microphone",
+                                                variant: .secondary, size: .sm)
     private let accessibilityStatus = NSTextField(labelWithString: "")
     private let accessibilityButton = BrandButton(title: "Open Accessibility",
                                                    variant: .secondary, size: .sm)
@@ -219,6 +224,7 @@ final class SettingsViewController: NSViewController {
         // Behaviour section
         outer.addArrangedSubview(sectionTitle("Behaviour"))
         outer.addArrangedSubview(autoInsertCheck)
+        outer.addArrangedSubview(appendSpaceCheck)
         outer.addArrangedSubview(restoreClipboardCheck)
         outer.addArrangedSubview(showHUDCheck)
         outer.addArrangedSubview(makeRow(title: "HUD position", control: hudPositionButton))
@@ -226,11 +232,11 @@ final class SettingsViewController: NSViewController {
         outer.addArrangedSubview(divider())
         outer.addArrangedSubview(sectionTitle("Permissions"))
 
-        let permRow = NSStackView(views: [accessibilityStatus, accessibilityButton])
-        permRow.orientation = .horizontal
-        permRow.spacing = 12
-        permRow.alignment = .centerY
-        outer.addArrangedSubview(permRow)
+        // Both TCC permissions the app needs, so nobody has to reopen the
+        // onboarding window just to check a status: mic (recording) and
+        // Accessibility (auto-paste).
+        outer.addArrangedSubview(permissionRow([microphoneStatus, microphoneButton]))
+        outer.addArrangedSubview(permissionRow([accessibilityStatus, accessibilityButton]))
 
         storeNoticeLabel.font = NSFont.systemFont(ofSize: 11)
         storeNoticeLabel.textColor = DesignTokens.inkMute
@@ -240,7 +246,7 @@ final class SettingsViewController: NSViewController {
         configureControls()
         styleCheckboxes()
         refreshFromSettings()
-        refreshAccessibilityStatus()
+        refreshPermissionStatuses()
         bindCoordinator()
         bindCatalogService()
         refreshModelStates()
@@ -248,10 +254,10 @@ final class SettingsViewController: NSViewController {
 
     override func viewWillAppear() {
         super.viewWillAppear()
-        // Poll while the settings window is visible so the indicator turns green as
-        // soon as System Settings commits the Accessibility change.
+        // Poll while the settings window is visible so the indicators turn green as
+        // soon as System Settings commits a permission change.
         let timer = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.refreshAccessibilityStatus() }
+            Task { @MainActor [weak self] in self?.refreshPermissionStatuses() }
         }
         RunLoop.main.add(timer, forMode: .common)
         statusPollTimer = timer
@@ -261,10 +267,10 @@ final class SettingsViewController: NSViewController {
             object: nil,
             queue: .main
         ) { [weak self] _ in
-            Task { @MainActor [weak self] in self?.refreshAccessibilityStatus(forceLog: true) }
+            Task { @MainActor [weak self] in self?.refreshPermissionStatuses(forceLog: true) }
         }
 
-        refreshAccessibilityStatus(forceLog: true)
+        refreshPermissionStatuses(forceLog: true)
     }
 
     override func viewWillDisappear() {
@@ -275,6 +281,14 @@ final class SettingsViewController: NSViewController {
             NotificationCenter.default.removeObserver(appActivationObserver)
             self.appActivationObserver = nil
         }
+    }
+
+    private func permissionRow(_ views: [NSView]) -> NSStackView {
+        let row = NSStackView(views: views)
+        row.orientation = .horizontal
+        row.spacing = 12
+        row.alignment = .centerY
+        return row
     }
 
     private func sectionTitle(_ s: String) -> NSTextField {
@@ -355,7 +369,7 @@ final class SettingsViewController: NSViewController {
     }
 
     private func styleCheckboxes() {
-        for cb in [autoInsertCheck, restoreClipboardCheck, showHUDCheck] {
+        for cb in [autoInsertCheck, appendSpaceCheck, restoreClipboardCheck, showHUDCheck] {
             cb.contentTintColor = DesignTokens.ink
         }
     }
@@ -528,6 +542,8 @@ final class SettingsViewController: NSViewController {
         keepMicWarmCheck.action = #selector(keepMicWarmChanged(_:))
         autoInsertCheck.target = self
         autoInsertCheck.action = #selector(autoInsertChanged(_:))
+        appendSpaceCheck.target = self
+        appendSpaceCheck.action = #selector(appendSpaceChanged(_:))
         restoreClipboardCheck.target = self
         restoreClipboardCheck.action = #selector(restoreClipboardChanged(_:))
         showHUDCheck.target = self
@@ -549,6 +565,8 @@ final class SettingsViewController: NSViewController {
         qualityButton.target = self
         qualityButton.action = #selector(qualityChanged(_:))
 
+        microphoneButton.target = self
+        microphoneButton.action = #selector(microphoneButtonTapped(_:))
         accessibilityButton.target = self
         accessibilityButton.action = #selector(openAccessibility(_:))
 
@@ -648,6 +666,7 @@ final class SettingsViewController: NSViewController {
 
         keepMicWarmCheck.state = Settings.shared.keepMicWarm ? .on : .off
         autoInsertCheck.state = Settings.shared.autoInsert ? .on : .off
+        appendSpaceCheck.state = Settings.shared.appendTrailingSpace ? .on : .off
         restoreClipboardCheck.state = Settings.shared.restoreClipboard ? .on : .off
         showHUDCheck.state = Settings.shared.showHUD ? .on : .off
 
@@ -660,6 +679,29 @@ final class SettingsViewController: NSViewController {
         }
 
         storeNoticeLabel.stringValue = "Auto-paste needs Accessibility access for this exact Dictly.app. If it stays red after granting access, remove Dictly from Accessibility and add /Applications/Dictly.app again."
+    }
+
+    private func refreshPermissionStatuses(forceLog: Bool = false) {
+        refreshMicrophoneStatus()
+        refreshAccessibilityStatus(forceLog: forceLog)
+    }
+
+    private func refreshMicrophoneStatus() {
+        let text: String, color: NSColor, buttonTitle: String
+        switch PermissionsChecker.microphoneStatus {
+        case .authorized:
+            (text, color, buttonTitle) = ("Microphone granted", DesignTokens.goodInk, "Open Microphone")
+        case .denied:
+            (text, color, buttonTitle) = ("Microphone not granted", DesignTokens.danger, "Open Microphone")
+        case .notDetermined:
+            (text, color, buttonTitle) = ("Microphone not requested yet", DesignTokens.inkMute, "Allow Microphone")
+        }
+        microphoneStatus.stringValue = text
+        microphoneStatus.textColor = color
+        microphoneStatus.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        // BrandButton's title setter re-derives styling and its width constraint —
+        // skip no-op assignments so the 1 s permission poll doesn't churn layout.
+        if microphoneButton.title != buttonTitle { microphoneButton.title = buttonTitle }
     }
 
     private func refreshAccessibilityStatus(forceLog: Bool = false) {
@@ -736,6 +778,10 @@ final class SettingsViewController: NSViewController {
         Settings.shared.autoInsert = sender.state == .on
     }
 
+    @objc private func appendSpaceChanged(_ sender: NSButton) {
+        Settings.shared.appendTrailingSpace = sender.state == .on
+    }
+
     @objc private func restoreClipboardChanged(_ sender: NSButton) {
         Settings.shared.restoreClipboard = sender.state == .on
     }
@@ -755,6 +801,19 @@ final class SettingsViewController: NSViewController {
         if let raw = sender.selectedItem?.representedObject as? String,
            let q = Settings.TranscriptionQuality(rawValue: raw) {
             Settings.shared.transcriptionQuality = q
+        }
+    }
+
+    @objc private func microphoneButtonTapped(_ sender: Any?) {
+        // Not asked yet → fire the system prompt right here; once answered, the
+        // only place to change it is System Settings → Privacy → Microphone.
+        if PermissionsChecker.microphoneStatus == .notDetermined {
+            Task { @MainActor [weak self] in
+                _ = await PermissionsChecker.requestMicrophone()
+                self?.refreshMicrophoneStatus()
+            }
+        } else {
+            PermissionsChecker.openMicrophoneSettings()
         }
     }
 
